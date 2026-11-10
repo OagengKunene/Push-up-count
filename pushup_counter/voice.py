@@ -14,25 +14,31 @@ from collections.abc import Callable
 from .counter import Phase, Snapshot
 from .tempo import TempoTarget
 
-WINDOWS_SCRIPT = r"""+$ErrorActionPreference = 'Stop'
-[Console]::InputEncoding = [System.Text.Encoding]::UTF8
-[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+WINDOWS_SCRIPT = r"""
+$ErrorActionPreference = 'Stop'
+$reader = [System.IO.StreamReader]::new(
+    [Console]::OpenStandardInput(), [System.Text.Encoding]::UTF8
+)
+$writer = [System.IO.StreamWriter]::new(
+    [Console]::OpenStandardOutput(), [System.Text.UTF8Encoding]::new($false)
+)
+$writer.AutoFlush = $true
 Add-Type -AssemblyName System.Speech
 $synth = New-Object System.Speech.Synthesis.SpeechSynthesizer
 try {
     if ($env:PUSHUP_VOICE_TEST -eq '1') {
         $synth.SetOutputToNull()
         $synth.Speak('Push up counter voice check')
-        [Console]::WriteLine('READY')
+        $writer.WriteLine('READY')
         exit 0
     }
     $synth.SetOutputToDefaultAudioDevice()
     $synth.Rate = 1
-    [Console]::WriteLine('READY')
-    while ($null -ne ($line = [Console]::ReadLine())) {
+    $writer.WriteLine('READY')
+    while ($null -ne ($line = $reader.ReadLine())) {
         if ($line -eq '__QUIT__') { break }
         $synth.Speak($line)
-        [Console]::WriteLine('DONE')
+        $writer.WriteLine('DONE')
     }
 } finally { $synth.Dispose() }
 """
@@ -50,11 +56,15 @@ def check_voice() -> bool:
             windows_command(),
             env=env,
             capture_output=True,
+            input="",
             text=True,
             timeout=30,
             creationflags=subprocess.CREATE_NO_WINDOW,
         )
-        return result.returncode == 0 and "READY" in result.stdout
+        ready = result.returncode == 0 and "READY" in result.stdout
+        if not ready:
+            print("Windows speech probe failed: " + result.stderr.strip()[:1500], file=sys.stderr)
+        return ready
     return bool(
         shutil.which("say")
         if sys.platform == "darwin"
@@ -77,7 +87,7 @@ class SystemVoice:
                 bufsize=1,
                 creationflags=subprocess.CREATE_NO_WINDOW,
             )
-            if self.process.stdout.readline().strip() != "READY":
+            if self.process.stdout.readline().lstrip("\ufeff").strip() != "READY":
                 self.close()
                 raise RuntimeError("Windows speech engine or audio output is unavailable")
         else:

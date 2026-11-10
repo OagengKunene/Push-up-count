@@ -40,6 +40,8 @@ class CalibrationProfile:
             raise ValueError("Calibrated thresholds are outside the supported range.")
         if not 145 <= self.top_median <= 180 or not 45 <= self.bottom_median <= 120:
             raise ValueError("Calibration poses are outside the supported range.")
+        if self.up_angle > self.top_median or self.down_angle < self.bottom_median:
+            raise ValueError("Calibration thresholds must include the captured positions.")
         CounterConfig(up_angle=self.up_angle, down_angle=self.down_angle)
 
     def apply(self, config: CounterConfig) -> CounterConfig:
@@ -154,7 +156,7 @@ class CalibrationWizard:
         if gap:
             self._clear_hold()
         current = observation.elbow_angle
-        expected = 145 <= current <= 180 if self.stage == "TOP" else 45 <= current <= 120
+        expected = 145 <= current <= 180 if self.stage == "TOP" else 45 <= current <= 110
         prompt = (
             "Hold a straight-arm plank for 2 seconds"
             if self.stage == "TOP"

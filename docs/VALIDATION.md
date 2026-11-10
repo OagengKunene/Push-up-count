@@ -6,8 +6,8 @@ Development checks performed on 10 November 2026.
 
 | Check | Result |
 | --- | --- |
-| Behavioral regression suite, Linux / Python 3.12.14 | 82 passed |
-| Behavioral regression suite, Linux / Python 3.14.10 | 82 passed |
+| Behavioral regression suite, Linux / Python 3.12.14 | 84 passed |
+| Behavioral regression suite, Linux / Python 3.14.10 | 84 passed |
 | Ruff lint and formatting | Passed |
 | Installed dependency compatibility | Passed for the two tested Python environments |
 | Synthetic 12-second movement trace | 4 counted reps, 0 retries, 360 processed frames |

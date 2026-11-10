@@ -92,3 +92,18 @@ def test_synthetic_calibration_is_marked_as_demo():
     wizard = CalibrationWizard(CounterConfig(), "demo", "standard", "synthetic demo")
     hold(wizard, 0, 172)
     assert hold(wizard, 3, 82).profile.source == "synthetic demo"
+
+
+def test_bottom_hold_must_be_reachable_under_the_bounded_depth_threshold():
+    wizard = CalibrationWizard(CounterConfig(), "default", "standard")
+    hold(wizard, 0, 172)
+    assert hold(wizard, 3, 120).profile is None
+    assert hold(wizard, 6, 100).profile.down_angle >= 100
+
+
+def test_profile_cannot_require_more_depth_than_the_captured_bottom(tmp_path):
+    wizard = CalibrationWizard(CounterConfig(), "default", "standard")
+    hold(wizard, 0, 172)
+    profile = hold(wizard, 3, 82).profile
+    with pytest.raises(ValueError, match="captured"):
+        save_profile(tmp_path, replace(profile, bottom_median=120, down_angle=110))
