@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pushup-counter"
-version = "1.0.0"
+version = "2.0.0"
 description = "Local webcam push-up counting with OpenCV and MediaPipe pose tracking"
 readme = "README.md"
 requires-python = ">=3.11,<3.15"
@@ -18,12 +18,17 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8,<10", "ruff>=0.12,<1"]
+build = ["pyinstaller==6.22.3"]
 
 [project.scripts]
 pushup-counter = "pushup_counter.app:main"
+pushup-desktop = "pushup_counter.desktop:main"
 
 [tool.setuptools.packages.find]
 include = ["pushup_counter*"]
+
+[tool.setuptools.package-data]
+pushup_counter = ["resources/*.html"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

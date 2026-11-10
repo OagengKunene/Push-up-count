@@ -18,6 +18,9 @@ def draw_dashboard(
     paused: bool,
     variant: str,
     demo: bool,
+    tempo=None,
+    voice_status: str = "off",
+    calibration_stage: str | None = None,
 ) -> Any:
     import cv2
     import numpy as np
@@ -60,7 +63,7 @@ def draw_dashboard(
     label("CURRENT SET", x, 102, 0.55, muted)
     label(str(snapshot.reps), x, 208, 2.8, white, 4)
     label(f"GOAL  {goal}" if goal else "FULL REPS", x, 240, 0.6, cyan)
-    phase = "PAUSED" if paused else snapshot.phase.value
+    phase = calibration_stage or ("PAUSED" if paused else snapshot.phase.value)
     label(phase, x, 288, 0.72, amber if paused else cyan, 2)
     elbow = f"{snapshot.angle:.0f} deg" if snapshot.angle is not None else "--"
     label(f"ELBOW   {elbow}", x, 330, 0.58)
@@ -72,10 +75,29 @@ def draw_dashboard(
     label(f"TIME    {minutes:02}:{seconds:02}", x, 470, 0.58)
     label(f"FPS     {fps:.1f}", x, 505, 0.58, muted)
     label(f"MODE    {variant.upper()}", x, 540, 0.58, muted)
+    if snapshot.last_event and snapshot.last_event.lowering_seconds is not None:
+        event = snapshot.last_event
+        label(f"SCORE   {event.quality_score:.0f}/100", x, 575, 0.55, cyan)
+        label(
+            f"D/H/U   {event.lowering_seconds:.1f}/{event.bottom_seconds:.1f}/"
+            f"{event.rising_seconds:.1f}s",
+            x,
+            607,
+            0.48,
+        )
+    if tempo:
+        label(f"TARGET  {tempo}", x, 639, 0.48, muted)
+    label(f"VOICE   {voice_status.upper()}", x, canvas.shape[0] - 48, 0.45, muted)
     feedback = "Paused - press SPACE to resume" if paused else snapshot.feedback
     if goal and snapshot.reps >= goal:
         feedback = "Goal reached! " + feedback
     for index, line in enumerate(textwrap.wrap(feedback, width=max(35, width // 12))):
         label(line, 25, height + 104 + index * 24, 0.6, amber)
-    label("SPACE pause  R new set  M mirror  Q quit", 25, canvas.shape[0] - 15, 0.45, muted)
+    label(
+        "SPACE pause  R new set  M mirror  V voice  D history  Q quit",
+        25,
+        canvas.shape[0] - 15,
+        0.45,
+        muted,
+    )
     return canvas

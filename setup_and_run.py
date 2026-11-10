@@ -30,7 +30,10 @@ def main() -> int:
             subprocess.run([str(python), "-m", "pip", "install", "--upgrade", "pip"], check=True)
             subprocess.run([str(python), "-m", "pip", "install", "-e", str(root)], check=True)
             marker.write_text(fingerprint)
-        return subprocess.call([str(python), "-m", "pushup_counter", *sys.argv[1:]], cwd=root)
+        entry = (
+            ["-m", "pushup_counter", *sys.argv[1:]] if sys.argv[1:] else [str(root / "desktop.py")]
+        )
+        return subprocess.call([str(python), *entry], cwd=root)
     except (OSError, subprocess.CalledProcessError) as exc:
         print(f"Setup failed: {exc}")
         print("Check your internet connection and the troubleshooting steps in README.md.")

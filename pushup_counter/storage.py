@@ -3,7 +3,7 @@
 import csv
 import json
 import uuid
-from dataclasses import asdict
+from dataclasses import asdict, fields
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -21,15 +21,7 @@ class WorkoutLog:
         self.handle = self.csv_path.open("x", newline="", encoding="utf-8")
         self.writer = csv.DictWriter(
             self.handle,
-            fieldnames=[
-                "set",
-                "number",
-                "timestamp",
-                "duration",
-                "min_angle",
-                "accepted",
-                "reason",
-            ],
+            fieldnames=["set", *[field.name for field in fields(RepEvent)]],
         )
         self.writer.writeheader()
         self.handle.flush()
@@ -37,6 +29,10 @@ class WorkoutLog:
         self.set_number = 1
         self.accepted = self.rejected = 0
         self.durations: list[float] = []
+        self.quality_scores: list[float] = []
+        self.phase_times: list[tuple[float, float, float]] = []
+        self.tempo_checks: list[bool] = []
+        self.metadata: dict = {}
 
     def new_set(self) -> None:
         self.set_number += 1
@@ -47,6 +43,17 @@ class WorkoutLog:
         if event.accepted:
             self.accepted += 1
             self.durations.append(event.duration)
+            if event.quality_score is not None:
+                self.quality_scores.append(event.quality_score)
+            if all(
+                value is not None
+                for value in (event.lowering_seconds, event.bottom_seconds, event.rising_seconds)
+            ):
+                self.phase_times.append(
+                    (event.lowering_seconds, event.bottom_seconds, event.rising_seconds)
+                )
+            if event.tempo_match is not None:
+                self.tempo_checks.append(event.tempo_match)
         else:
             self.rejected += 1
 
@@ -55,6 +62,7 @@ class WorkoutLog:
             return
         self.handle.close()
         summary = {
+            "schema_version": 2,
             "started_utc": self.started,
             "ended_utc": datetime.now(UTC).isoformat(),
             "source": self.source,
@@ -67,9 +75,26 @@ class WorkoutLog:
             if self.durations
             else None,
             "end_reason": reason,
+            "mean_quality_score": round(sum(self.quality_scores) / len(self.quality_scores), 1)
+            if self.quality_scores
+            else None,
+            "mean_lowering_seconds": self._phase_mean(0),
+            "mean_bottom_seconds": self._phase_mean(1),
+            "mean_rising_seconds": self._phase_mean(2),
+            "tempo_match_rate": sum(self.tempo_checks) / len(self.tempo_checks)
+            if self.tempo_checks
+            else None,
             "thresholds": asdict(self.config),
             "rep_csv": self.csv_path.name,
+            **self.metadata,
         }
         temporary = self.summary_path.with_suffix(".tmp")
         temporary.write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
         temporary.replace(self.summary_path)
+
+    def _phase_mean(self, index: int) -> float | None:
+        return (
+            round(sum(row[index] for row in self.phase_times) / len(self.phase_times), 3)
+            if self.phase_times
+            else None
+        )

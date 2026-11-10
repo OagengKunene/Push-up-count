@@ -2,6 +2,7 @@
 
 import hashlib
 import os
+import sys
 import tempfile
 import urllib.error
 import urllib.request
@@ -20,6 +21,9 @@ def digest(path: Path) -> str:
 
 
 def default_model_path() -> Path:
+    bundled = Path(getattr(sys, "_MEIPASS", "")) / "assets" / "pose_landmarker_lite.task"
+    if getattr(sys, "frozen", False) and bundled.is_file():
+        return bundled
     root = Path(os.environ.get("LOCALAPPDATA", Path.home() / ".cache"))
     return root / "pushup-counter" / "pose_landmarker_lite.task"
 

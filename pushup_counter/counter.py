@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 
 from .config import CounterConfig
+from .tempo import TempoTarget, quality_score
 
 
 class Phase(StrEnum):
@@ -33,6 +34,13 @@ class RepEvent:
     min_angle: float
     accepted: bool
     reason: str
+    lowering_seconds: float | None = None
+    bottom_seconds: float | None = None
+    rising_seconds: float | None = None
+    quality_score: float | None = None
+    min_body_angle: float | None = None
+    lockout_angle: float | None = None
+    tempo_match: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -44,11 +52,16 @@ class Snapshot:
     progress: float
     feedback: str
     event: RepEvent | None = None
+    last_event: RepEvent | None = None
 
 
 class PushUpCounter:
-    def __init__(self, config: CounterConfig | None = None) -> None:
+    def __init__(
+        self, config: CounterConfig | None = None, tempo: TempoTarget | None = None
+    ) -> None:
         self.config = config or CounterConfig()
+        self.tempo = tempo
+        self.last_event: RepEvent | None = None
         self.reps = 0
         self.rejected = 0
         self._last_timestamp: float | None = None
@@ -61,6 +74,9 @@ class PushUpCounter:
         self.smoothed: float | None = None
         self._started: float | None = None
         self._min_angle = 180.0
+        self._min_body = 180.0
+        self._bottom_at: float | None = None
+        self._rise_at: float | None = None
         self._candidate: str | None = None
         self._candidate_since = 0.0
 
@@ -71,6 +87,7 @@ class PushUpCounter:
 
     def reset(self) -> None:
         self.reps = self.rejected = 0
+        self.last_event = None
         self.interrupt()
         self._side = None
 
@@ -90,7 +107,14 @@ class PushUpCounter:
             )
         )
         return Snapshot(
-            self.reps, self.rejected, self.phase, self.smoothed, progress, feedback, event
+            self.reps,
+            self.rejected,
+            self.phase,
+            self.smoothed,
+            progress,
+            feedback,
+            event,
+            self.last_event,
         )
 
     def snapshot(self, feedback: str) -> Snapshot:
@@ -144,15 +168,24 @@ class PushUpCounter:
                 self.phase = Phase.LOWERING
                 self._started = timestamp
                 self._min_angle = current
+                self._min_body = observation.body_angle
+                self._bottom_at = self._rise_at = None
                 self._candidate = None
         else:
             self._min_angle = min(self._min_angle, current)
+            self._min_body = min(self._min_body, observation.body_angle)
             if self._started is not None and timestamp - self._started > cfg.max_rep_seconds:
                 self.interrupt()
                 return self._snapshot("Rep timed out - return to a straight-arm plank")
+            if self.phase == Phase.BOTTOM and current > cfg.down_angle + cfg.hysteresis:
+                self.phase = Phase.RISING
+                if self._rise_at is None:
+                    self._rise_at = timestamp
             if current <= cfg.down_angle:
                 if self._held("bottom", timestamp):
                     self.phase = Phase.BOTTOM
+                    if self._bottom_at is None:
+                        self._bottom_at = self._candidate_since
                     feedback = "Depth reached - push up"
             elif current >= cfg.up_angle:
                 if self._held("finish", timestamp):
@@ -168,17 +201,46 @@ class PushUpCounter:
                         self.reps += 1
                     else:
                         self.rejected += 1
-                    event = RepEvent(
-                        self.reps, timestamp, duration, self._min_angle, accepted, reason
+                    lowering = (self._bottom_at - self._started) if reached_bottom else duration
+                    rise_at = self._rise_at if self._rise_at is not None else timestamp
+                    bottom = max(0.0, rise_at - self._bottom_at) if reached_bottom else 0.0
+                    rising = timestamp - rise_at if reached_bottom else 0.0
+                    tempo_match = (
+                        self.tempo.matches(lowering, bottom, rising)
+                        if (self.tempo and accepted)
+                        else None
                     )
+                    event = RepEvent(
+                        self.reps,
+                        timestamp,
+                        duration,
+                        self._min_angle,
+                        accepted,
+                        reason,
+                        lowering,
+                        bottom,
+                        rising,
+                        quality_score(
+                            self._min_body,
+                            current,
+                            self._min_angle,
+                            cfg.up_angle,
+                            cfg.down_angle,
+                            accepted,
+                        ),
+                        self._min_body,
+                        current,
+                        tempo_match,
+                    )
+                    self.last_event = event
                     self.phase = Phase.TOP
                     self._started = None
                     self._candidate = None
                     feedback = f"Rep {self.reps} counted" if accepted else f"Try again: {reason}"
+                    if accepted and self.tempo:
+                        feedback += " - " + self.tempo.feedback(lowering, bottom, rising)
             else:
                 self._candidate = None
-                if self.phase == Phase.BOTTOM and current > cfg.down_angle + cfg.hysteresis:
-                    self.phase = Phase.RISING
                 feedback = "Push back to straight arms" if self.phase == Phase.RISING else feedback
         return self._snapshot(feedback, event)
 

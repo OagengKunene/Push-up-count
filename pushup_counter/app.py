@@ -14,6 +14,7 @@ from pathlib import Path
 from . import __version__
 from .config import CounterConfig
 from .counter import PushUpCounter
+from .tempo import TempoTarget
 
 
 def positive_float(value: str) -> float:
@@ -40,18 +41,38 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--demo-seconds", type=positive_float, default=12.0)
     result.add_argument("--variant", choices=("standard", "knee"), default="standard")
     result.add_argument("--side", choices=("auto", "left", "right"), default="auto")
-    result.add_argument("--up-angle", type=float, default=160.0)
-    result.add_argument("--down-angle", type=float, default=95.0)
+    result.add_argument("--up-angle", type=float)
+    result.add_argument("--down-angle", type=float)
     result.add_argument("--min-body-angle", type=float, default=155.0)
     result.add_argument("--goal", type=positive_int, help="show a target rep count")
     result.add_argument("--mirror", action=argparse.BooleanOptionalAction, default=None)
     result.add_argument("--sound", action="store_true", help="play a system sound on counted reps")
+    result.add_argument("--voice", action="store_true", help="offline spoken counts and coaching")
+    result.add_argument(
+        "--check-voice", action="store_true", help="check the offline speech engine"
+    )
+    result.add_argument(
+        "--tempo", type=TempoTarget.parse, help="lower-hold-rise seconds, e.g. 3-1-1"
+    )
+    result.add_argument(
+        "--calibrate", action="store_true", help="save guided top/bottom calibration"
+    )
+    result.add_argument("--profile", default="default", help="calibration profile name")
+    result.add_argument("--profile-dir", type=Path)
+    result.add_argument("--data-dir", type=Path, help="override the personal data folder")
+    result.add_argument("--dashboard", action="store_true", help="open local workout history")
+    result.add_argument("--dashboard-output", type=Path)
+    result.add_argument(
+        "--no-open", action="store_true", help="save the dashboard without opening it"
+    )
+    result.add_argument("--desktop", action="store_true", help="open the desktop launcher")
+    result.add_argument("--stop-file", type=Path, help=argparse.SUPPRESS)
     result.add_argument("--headless", action="store_true", help="skip the preview window")
     result.add_argument("--max-frames", type=positive_int, help="stop after this many frames")
     result.add_argument(
         "--output-video", type=Path, help="explicitly save annotated video (.mp4/.avi)"
     )
-    result.add_argument("--log-dir", type=Path, default=Path("workouts"))
+    result.add_argument("--log-dir", type=Path)
     result.add_argument("--no-log", action="store_true", help="disable CSV/JSON workout files")
     result.add_argument("--model", type=Path, help="path to the official Lite v1 model")
     result.add_argument("--offline", action="store_true", help="never download a missing model")
@@ -124,8 +145,11 @@ def run(args: argparse.Namespace, config: CounterConfig) -> int:
     from .overlay import draw_dashboard
     from .pose import PoseTracker
     from .storage import WorkoutLog
+    from .voice import Speaker, VoiceCoach
 
-    counter = PushUpCounter(config)
+    counter = PushUpCounter(config, args.tempo)
+    speaker = Speaker(args.voice)
+    coach = VoiceCoach(speaker, args.tempo)
     capture = tracker = writer = log = None
     processed, elapsed, end_reason = 0, 0.0, "finished"
     mirror = args.mirror if args.mirror is not None else not (args.video or args.demo)
@@ -148,6 +172,9 @@ def run(args: argparse.Namespace, config: CounterConfig) -> int:
         if not args.no_log:
             source = "synthetic demo" if args.demo else ("video" if args.video else "webcam")
             log = WorkoutLog(args.log_dir, config, source, args.variant)
+            log.metadata.update(
+                {"profile": args.profile, "target_tempo": str(args.tempo) if args.tempo else None}
+            )
         if not args.headless:
             if sys.platform.startswith("linux") and not (
                 os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")
@@ -158,6 +185,9 @@ def run(args: argparse.Namespace, config: CounterConfig) -> int:
         previous = started
         smoothed_fps = 0.0
         while True:
+            if args.stop_file and args.stop_file.exists():
+                end_reason = "user finished"
+                break
             if args.max_frames and processed >= args.max_frames:
                 break
             elapsed = (
@@ -186,6 +216,7 @@ def run(args: argparse.Namespace, config: CounterConfig) -> int:
                         frame = cv2.flip(frame, 1)
                     pose = tracker.process(frame, elapsed)
                 snapshot = counter.update(elapsed, pose.observation)
+                coach.update(elapsed, snapshot)
                 if snapshot.event:
                     if log:
                         log.record(snapshot.event)
@@ -216,6 +247,10 @@ def run(args: argparse.Namespace, config: CounterConfig) -> int:
                 paused=paused,
                 variant=args.variant,
                 demo=args.demo,
+                tempo=args.tempo,
+                voice_status="unavailable"
+                if speaker.error
+                else ("on" if speaker.enabled else "off"),
             )
             if args.output_video and not paused:
                 if writer is None:
@@ -250,6 +285,12 @@ def run(args: argparse.Namespace, config: CounterConfig) -> int:
                     mirror = not mirror
                     counter.interrupt()
                     snapshot = counter.snapshot("View changed - start in a straight-arm plank")
+                if key in (ord("v"), ord("V")):
+                    speaker.set_enabled(not speaker.enabled)
+                if key in (ord("d"), ord("D")):
+                    from .history import generate_dashboard
+
+                    generate_dashboard([args.log_dir], open_browser=True)
                 if cv2.getWindowProperty("Push-up Counter", cv2.WND_PROP_VISIBLE) < 1:
                     end_reason = "window closed"
                     break
@@ -261,6 +302,7 @@ def run(args: argparse.Namespace, config: CounterConfig) -> int:
         end_reason = "error"
         raise
     finally:
+        speaker.close()
         if capture is not None:
             capture.release()
         if writer is not None:
@@ -270,6 +312,7 @@ def run(args: argparse.Namespace, config: CounterConfig) -> int:
         if not args.headless:
             cv2.destroyAllWindows()
         if log is not None:
+            log.metadata["processed_frames"] = processed
             log.close(elapsed, end_reason)
             print(f"Workout summary: {log.summary_path}")
         print(
@@ -289,7 +332,15 @@ def main(argv: list[str] | None = None) -> int:
     args = cli.parse_args(argv)
     if args.camera < 0:
         cli.error("--camera must be non-negative")
-    if args.headless and not (args.video or args.demo or args.max_frames or args.check):
+    if args.headless and not (
+        args.video
+        or args.demo
+        or args.max_frames
+        or args.check
+        or args.dashboard
+        or args.download_model
+        or args.check_voice
+    ):
         cli.error("Headless webcam use requires --max-frames so the run stops automatically.")
     if args.output_video:
         if args.output_video.suffix.lower() not in (".mp4", ".avi"):
@@ -299,9 +350,49 @@ def main(argv: list[str] | None = None) -> int:
         if args.video and args.video.resolve() == args.output_video.resolve():
             cli.error("Input and output video paths must differ.")
     try:
-        config = CounterConfig(
-            up_angle=args.up_angle, down_angle=args.down_angle, min_body_angle=args.min_body_angle
-        )
+        from dataclasses import replace
+
+        from .calibration import load_profile, profile_filename
+        from .paths import data_directory
+
+        if args.data_dir:
+            os.environ["PUSHUP_DATA_DIR"] = str(args.data_dir.expanduser().resolve())
+        args.log_dir = args.log_dir or data_directory() / "workouts"
+        args.profile_dir = args.profile_dir or data_directory() / "profiles"
+        profile_filename(args.profile)
+        if args.desktop:
+            from .desktop import launch
+
+            return launch()
+        if args.dashboard:
+            from .history import generate_dashboard
+
+            print(
+                generate_dashboard(
+                    [args.log_dir], args.dashboard_output, open_browser=not args.no_open
+                )
+            )
+            return 0
+        if args.check_voice:
+            from .voice import check_voice
+
+            available = check_voice()
+            print("Offline speech engine ready" if available else "Offline speech unavailable")
+            return 0 if available else 1
+        config = CounterConfig(min_body_angle=args.min_body_angle)
+        profile = load_profile(args.profile_dir, args.profile) if not args.calibrate else None
+        if profile:
+            if profile.source == "synthetic demo" and not args.demo:
+                raise ValueError("This is a demo calibration; recalibrate with your camera first.")
+            if profile.variant != args.variant:
+                raise ValueError(
+                    "Profile variant differs; choose the matching variant or recalibrate."
+                )
+            config = profile.apply(config)
+        if args.up_angle is not None:
+            config = replace(config, up_angle=args.up_angle)
+        if args.down_angle is not None:
+            config = replace(config, down_angle=args.down_angle)
         if args.check or args.check_camera:
             return diagnostics(args.check_camera, args.camera, args.model)
         if args.download_model:
@@ -309,6 +400,10 @@ def main(argv: list[str] | None = None) -> int:
 
             print(f"Model ready: {ensure_model(args.model, allow_download=not args.offline)}")
             return 0
+        if args.calibrate:
+            from .calibration_ui import run_calibration
+
+            return run_calibration(args, config)
         return run(args, config)
     except Exception as exc:
         if args.debug:

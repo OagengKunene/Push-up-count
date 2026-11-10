@@ -1,5 +1,9 @@
 # Push-up Count
 
+**Version 2:** personal calibration, tempo analysis, offline spoken coaching, a local history dashboard and a standalone Windows app.
+
+**[Download the Windows app](https://github.com/OagengKunene/Push-up-count/releases/latest)** · [Source ZIP](https://github.com/OagengKunene/Push-up-count/archive/refs/heads/main.zip)
+
 [![Tests](https://github.com/OagengKunene/Push-up-count/actions/workflows/tests.yml/badge.svg)](https://github.com/OagengKunene/Push-up-count/actions/workflows/tests.yml)
 ![Python](https://img.shields.io/badge/Python-3.11%E2%80%933.14-blue)
 ![OpenCV](https://img.shields.io/badge/OpenCV-5.0-teal)
@@ -23,11 +27,19 @@ A webcam program that counts push-ups live using **OpenCV** and **Google MediaPi
 - Accepts a webcam or local video. Annotated video recording is optional and must be requested.
 - Includes a camera-free synthetic demo, diagnostics, regression tests and GitHub Actions checks.
 
-## Start on Windows
+## Standalone Windows app
+
+Open [Releases](https://github.com/OagengKunene/Push-up-count/releases/latest), download the `PushUpCounter-2.0.0-windows-x64.zip` asset, extract the **entire folder**, then double-click **PushUpCounter.exe**. Keep its `_internal` folder beside the executable. Python and the verified pose model are included, so the app does not need an initial model download.
+
+The launcher lets you choose the camera, profile, standard/knee variant, rep goal and target tempo. Enable **Spoken coaching**, then choose **Start workout**. Use **Finish and save** in the launcher or Q in the camera window to finish. **Try demo** uses synthetic input, and **Analyze video** lets you select an existing local recording.
+
+The build is unsigned. The release includes `SHA256SUMS.txt`, a bundle validation record and the source commit; verify the download against those files. GitHub Actions builds and exercises the EXE on Windows before publishing it.
+
+## Run from source on Windows
 
 1. Install **64-bit Python 3.11–3.14** from [python.org](https://www.python.org/downloads/), if needed. Python 3.14 is supported by this project; there is no requirement to install 3.12 specifically.
 2. Choose **Code → Download ZIP** on this repository, then **extract the whole ZIP** to a normal folder.
-3. Double-click **`start_windows.bat`** inside the extracted folder.
+3. Double-click **`start_windows.bat`** inside the extracted folder to open the desktop launcher.
 
 The launcher creates a private `.venv` environment and installs dependencies. The first real-camera run also downloads Google's approximately 5.5 MiB pose model and verifies its SHA-256 checksum. Later launches reuse the installed dependencies and cached model. Keep an internet connection for the initial setup.
 
@@ -64,7 +76,40 @@ If the counter cannot see a usable pose, it displays positioning feedback. Repos
 | Space | Pause / resume; an unfinished rep is discarded |
 | R | Start a new set at zero; earlier logged sets remain in the workout totals |
 | M | Mirror / unmirror the camera view; restart the current movement |
+| V | Toggle offline spoken coaching |
+| D | Open the local history dashboard |
 | Q or Esc | Quit and save the workout summary |
+
+## Calibration, tempo and coaching
+
+Choose a profile name in the launcher, select your exercise variant and click **Calibrate profile**. With your full visible side in view, hold a straight-arm plank for two seconds, then lower and hold the bottom for two seconds. The wizard requires a stable angle, adequate pose confidence and acceptable body alignment. Pose loss, a side change or excessive movement restarts a hold. Calibration does not count workout reps.
+
+The saved top threshold is the measured top median minus 8°, bounded to 145–175°. The bottom threshold is the bottom median plus 8°, bounded to 60–110°. The thresholds must stay at least 35° apart. Existing body-alignment checks remain active. Use separate profiles for different camera views and variants; the launcher selects `knee` when switching from the default standard profile to knee push-ups.
+
+```bash
+python app.py --calibrate --profile default --voice
+python app.py --profile default --tempo 3-1-1 --voice --goal 20
+python app.py --variant knee --profile knee --calibrate
+```
+
+Tempo is **lowering–bottom hold–rising**, in seconds. A `3-1-1` target means three seconds down, one second at the bottom, one second up. Every completed attempt records the three measured phases. For accepted reps, the target match allows the larger of 0.35 seconds or 30% of each target phase. Tempo feedback does not alter the rep count.
+
+Phase times describe transitions between observed angle zones; smoothing, threshold holds and brief tracking gaps affect these estimates. They do not measure force or physiological time under tension. A transparent pose score combines depth (40%), minimum observed body alignment (40%) and top extension (20%). Completed rejected attempts are capped at 59. The score is a software heuristic, not an independently validated assessment of technique.
+
+Spoken counts and positioning cues run on a background worker with a three-item queue and feedback cooldowns. Windows uses the installed System.Speech engine; macOS uses `say`; Linux needs `espeak-ng` or `espeak`. Speech is offline. If no speech engine/audio output is available, counting continues and the app reports voice as unavailable. `python app.py --check-voice` checks the backend; on Windows it synthesizes to a null output, so an audible check on your speakers is still needed.
+
+## Workout history dashboard
+
+Choose **Workout history** in the launcher, press D in a workout, or run:
+
+```bash
+python app.py --dashboard
+python app.py --dashboard --no-open --dashboard-output history.html
+```
+
+The dashboard opens a self-contained local HTML report. It shows accepted-rep totals, best session, active days, weekly progress, pose scores and tempo match rates. Search by date/source/profile, filter by variant, export the selected sessions as CSV, or open a session for per-rep phase timings. Weekly goals are saved in that browser's local storage when available.
+
+Demo workouts are labelled and excluded by default. Old version-one CSV/JSON logs remain readable; missing historical metrics show a dash. The report is a snapshot: reopen History after finishing a workout to include new records. It loads no external fonts, scripts or services.
 
 ## Install manually
 
@@ -180,7 +225,9 @@ The angle and depth percentage are **2D pose-based estimates**. A 100% depth bar
 
 ## Saved workouts and privacy
 
-By default, `workouts/` contains a uniquely named `*_reps.csv` and `*_summary.json` for each run. The CSV records set number, rep number, timestamp, duration, minimum elbow angle, acceptance and reason. The summary records accepted reps across all sets, completed retries, mean accepted-rep duration and the configured thresholds. The timestamp is seconds from the camera session start or the position in an input/demo video. Duration is measured between movement-state thresholds.
+By default, personal data is saved under `%LOCALAPPDATA%\PushUpCounter` on Windows, `~/.local/share/pushup-counter` on Linux (or `XDG_DATA_HOME`) and `~/Library/Application Support/PushUpCounter` on macOS. The `workouts` subfolder contains uniquely named `*_reps.csv` and `*_summary.json` files. Profiles live in `profiles`; generated dashboards live in `reports`. Use `--data-dir` or `--log-dir` to choose a different location. The history reader also finds legacy `workouts/` records in the current project folder.
+
+The CSV records set number, rep number, timestamp, duration, minimum elbow angle, acceptance/reason, lowering/hold/rising times, pose score, minimum body angle, top extension and target tempo match. The summary stores accepted totals across sets, retries, average metrics, target tempo and thresholds. Timestamps follow the camera/input timeline; duration is measured between movement-state thresholds.
 
 Logs are flushed after each completed attempt. A normal quit or Ctrl+C also writes the final summary. Demo logs are explicitly labelled `synthetic demo`. Webcam elapsed time includes pauses; prerecorded/demo elapsed time follows the input timeline.
 

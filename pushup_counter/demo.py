@@ -19,12 +19,12 @@ def demo_angle(timestamp: float) -> float:
     return 172.0
 
 
-def demo_frame(timestamp: float):
+def demo_frame(timestamp: float, elbow_angle: float | None = None):
     import cv2
     import numpy as np
 
     frame = np.full((540, 900, 3), (27, 34, 45), dtype=np.uint8)
-    elbow_angle = demo_angle(timestamp)
+    elbow_angle = demo_angle(timestamp) if elbow_angle is None else elbow_angle
     depth = (172 - elbow_angle) / 90
     shoulder = (250, int(195 + depth * 100))
     hip = (490, int(220 + depth * 70))
