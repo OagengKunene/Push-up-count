@@ -1,0 +1,2 @@
+# The editable project is the single source of runtime dependency versions.
+-e .
